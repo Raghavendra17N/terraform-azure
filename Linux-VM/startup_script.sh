@@ -16,57 +16,63 @@ else
   sudo apt install ansible -y 
 fi
 
-if [ "$1" != "" ]; then
-  export MY_PWD="$1"
-else
-  export MY_PWD="changeme"
-fi
+sudo apt-get update && sudo apt-get install default-jdk -y
+sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -cs`-pgdg main" >> /etc/apt/sources.list.d/pgdg.list'
+sudo wget -q https://www.postgresql.org/media/keys/ACCC4CF8.asc -O - | sudo apt-key add -
+sudo apt-get -y install postgresql postgresql-contrib
 
-export MY_USER="sonarqube"
-useradd $MY_USER
-echo "$MY_PWD" | passwd $MY_USER --stdin
-usermod -aG wheel $MY_USER
-su -m $MY_USER
-cd /home/$MY_USER
+sed -i -e '1ilocal    postgres     postgres     peer\' /etc/postgresql/10/main/pg_hba.conf
 
-# login as sonarqube
-# echo "$MY_PWD" | sudo -S yum install -y epel-release
-# sudo yum update -y
-echo "$MY_PWD" | sudo -S yum install -y java-1.8.0-openjdk wget unzip
+echo "postgres:postgres" | chpasswd
+echo "postgres" | passwd --stdin postgres
+service postgresql restart
+sudo -u postgres psql -c "ALTER USER postgres PASSWORD 'postgres';"
+sudo systemctl enable postgresql
 
-echo "$MY_PWD" | sudo -S rpm -Uvh https://download.postgresql.org/pub/repos/yum/9.6/redhat/rhel-7-x86_64/pgdg-centos96-9.6-3.noarch.rpm
-sudo yum -y install postgresql96-server postgresql96-contrib
-sudo /usr/pgsql-9.6/bin/postgresql96-setup initdb
 
-sudo sed -i -e 's/peer/trust/g' /var/lib/pgsql/9.6/data/pg_hba.conf
-sudo sed -i -e 's/ident/md5/g' /var/lib/pgsql/9.6/data/pg_hba.conf
+sudo systemctl start postgresql
+sudo systemctl enable postgresql
 
-sudo systemctl start postgresql-9.6
-sudo systemctl enable postgresql-9.6
+su - postgres -c "createuser sonar"
 
-psql -U postgres -c "CREATE USER sonar WITH ENCRYPTED password '$MY_PWD';"
-psql -U postgres -c "CREATE DATABASE sonar OWNER sonar;"
+sudo -u postgres psql -c  "ALTER USER sonar WITH ENCRYPTED password 'Raghu@123';"
+sudo -u postgres psql -c  "CREATE DATABASE sonarqube OWNER sonar;"
+sudo -u postgres psql -c  "GRANT ALL PRIVILEGES ON DATABASE sonarqube to sonar;"
 
-wget https://sonarsource.bintray.com/Distribution/sonarqube/sonarqube-6.5.zip
-sudo unzip sonarqube-6.5.zip -d /opt
-sudo mv /opt/sonarqube-6.5 /opt/sonarqube
+sudo wget https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-8.6.0.39681.zip
+sudo apt-get -y install unzip
+sudo unzip sonarqube*.zip -d /opt
+sudo mv /opt/sonarqube-8.6.0.39681 /opt/sonarqube -v
 
 sudo sed -i -e 's/#sonar.jdbc.username=/sonar.jdbc.username=sonar/g' /opt/sonarqube/conf/sonar.properties
-sudo sed -i -e 's/#sonar.jdbc.password=/sonar.jdbc.password=huawei123/g' /opt/sonarqube/conf/sonar.properties
-sudo sed -i -e 's/#sonar.jdbc.url=jdbc:postgresql/sonar.jdbc.url=jdbc:postgresql/g' /opt/sonarqube/conf/sonar.properties
+sudo sed -i -e 's/#sonar.jdbc.password=/sonar.jdbc.password=Raghu@123/g' /opt/sonarqube/conf/sonar.properties
+echo "sonar.jdbc.url=jdbc:postgresql://localhost/sonarqube" >> /opt/sonarqube/conf/sonar.properties
 
 echo "[Unit]
 Description=SonarQube service
 After=syslog.target network.target
+
 [Service]
 Type=forking
+
 ExecStart=/opt/sonarqube/bin/linux-x86-64/sonar.sh start
 ExecStop=/opt/sonarqube/bin/linux-x86-64/sonar.sh stop
-User=root
-Group=root
+LimitNOFILE=131072
+LimitNPROC=8192
+User=sonar
+Group=sonarGroup
 Restart=always
+
 [Install]
 WantedBy=multi-user.target" | sudo tee -a /etc/systemd/system/sonar.service
+
+echo "vm.max_map_count=262144" >> /etc/sysctl.conf
+echo "fs.file-max=65536" >> /etc/sysctl.conf
+
+echo "sonar   -   nofile   65536" >> /etc/security/limits.conf
+echo "sonar   -   nproc    4096" >> /etc/security/limits.conf
+
+sudo sysctl -p
 
 sudo service sonarqube start
 sudo systemctl enable sonar
